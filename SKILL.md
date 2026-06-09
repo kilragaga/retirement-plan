@@ -934,18 +934,33 @@ RSI调仓（低买高卖）           ~10-11%  频繁调仓摩擦
 ### 8.1 纳指历史数据接口
 
 > 以下接口可获取纳指100历史数据，用于自定义回测验证报告中的结论
+> 接口可用性可能随时变化，建议优先使用 akshare 东方财富源
 
-#### Python (akshare) — 纳指100指数历史行情
+#### 接口一：akshare 东方财富 — 纳指100 ETF (QQQ) 长周期数据（推荐）
 
 ```python
 import akshare as ak
 
-# 纳指100指数日线行情（可自定义起止日期）
-df = ak.index_us_stock_sina(symbol=".NDX", start_date="20000101", end_date="20261231")
-# 返回字段: date, open, high, low, close, volume
+# QQQ（纳指100 ETF）月度数据，从2001年至今
+# 注意：symbol 格式为 "105.QQQ"，105是东方财富的市场代码
+df = ak.stock_us_hist(symbol="105.QQQ", period="monthly", start_date="20010101", end_date="20261231", adjust="qfq")
+# 返回字段: 日期, 开盘, 收盘, 最高, 最低, 成交量, 成交额, 振幅, 涨跌幅, 涨跌额, 换手率
+# 覆盖范围: 2001年至今（可回测2000年泡沫后的行情）
 ```
 
-#### Python (akshare) — 国内纳指100基金净值
+#### 接口二：akshare 新浪 — 纳指100指数日线
+
+```python
+import akshare as ak
+
+# 纳指100指数日线行情
+# 注意：新浪数据只从2014年开始，无法回测2000年泡沫
+df = ak.index_us_stock_sina(symbol=".NDX")
+# 返回字段: date, open, high, low, close, volume, amount
+# 覆盖范围: 2014年至今
+```
+
+#### 接口三：akshare 东方财富 — 国内纳指100基金净值
 
 ```python
 import akshare as ak
@@ -953,20 +968,20 @@ import akshare as ak
 # 易方达纳指100联接A (161130) 历史净值
 df = ak.fund_open_fund_info_em(symbol="161130", indicator="单位净值走势")
 # 返回字段: 日期, 单位净值
+# 覆盖范围: 基金成立日至今
 
-# 或获取更多纳指基金
+# 其他纳指基金
 funds = ["161130", "270042", "040046"]  # 易方达/广发/上投 纳指100联接A
 for code in funds:
     df = ak.fund_open_fund_info_em(symbol=code, indicator="单位净值走势")
-    # df 包含完整历史净值数据
 ```
 
-#### Python (yfinance) — 纳指100 ETF 历史行情
+#### 接口四：yfinance — 纳指100 ETF / 指数（备选）
 
 ```python
 import yfinance as yf
 
-# 纳指100 ETF (QQQ) 日线行情
+# 纳指100 ETF (QQQ) 日线行情，从1999年至今
 qqq = yf.Ticker("QQQ")
 df = qqq.history(start="2000-01-01", end="2026-12-31")
 # 返回字段: Open, High, Low, Close, Volume, Dividends, Stock Splits
@@ -974,26 +989,27 @@ df = qqq.history(start="2000-01-01", end="2026-12-31")
 # 纳斯达克综合指数 (^IXIC)
 ixic = yf.Ticker("^IXIC")
 df = ixic.history(start="2000-01-01", end="2026-12-31")
+
+# 注意：yfinance 有频率限制，请求过多会被限流
 ```
 
-#### 回测示例代码
+#### 回测示例一：国内基金定投（2013年至今）
 
 ```python
 """
-最简纳指定投回测：验证本报告中的数据
+国内纳指基金定投回测
 依赖: pip install akshare pandas
 """
 import akshare as ak
 import pandas as pd
 
-def backtest_dca(fund_code="161130", start="20130101", end="20261231", monthly=1000):
-    """模拟每月固定金额定投"""
+def backtest_fund_dca(fund_code="161130", start="20130101", end="20261231", monthly=1000):
+    """模拟每月固定金额定投国内纳指基金"""
     df = ak.fund_open_fund_info_em(symbol=fund_code, indicator="单位净值走势")
     df.columns = ["date", "nav"]
     df["date"] = pd.to_datetime(df["date"])
     df = df[(df["date"] >= start) & (df["date"] <= end)]
 
-    # 取每月第一个交易日
     monthly_df = df.groupby(df["date"].dt.to_period("M")).first().reset_index(drop=True)
 
     total_shares = 0.0
@@ -1008,9 +1024,7 @@ def backtest_dca(fund_code="161130", start="20130101", end="20261231", monthly=1
         records.append({
             "date": row["date"],
             "nav": row["nav"],
-            "monthly_invest": monthly,
             "total_invested": total_invested,
-            "total_shares": round(total_shares, 2),
             "market_value": round(current_value, 2),
             "profit_pct": round((current_value / total_invested - 1) * 100, 2),
         })
@@ -1028,15 +1042,78 @@ def backtest_dca(fund_code="161130", start="20130101", end="20261231", monthly=1
     print(f"总收益率: {final['profit_pct']:.1f}%")
     print(f"年化收益: {cagr*100:.1f}%")
 
-    # 找最大回撤期间
     result["drawdown"] = (result["market_value"] - result["total_invested"]) / result["total_invested"]
     worst = result.loc[result["drawdown"].idxmin()]
     print(f"最大浮亏: {worst['drawdown']*100:.1f}% ({worst['date'].strftime('%Y-%m')})")
 
     return result
 
-# 运行: 回测2013-2026每月定投1000元
-backtest_dca(fund_code="161130", start="20130101", end="20261231", monthly=1000)
+# 运行
+backtest_fund_dca(fund_code="161130", start="20130101", end="20261231", monthly=1000)
+```
+
+#### 回测示例二：QQQ 长周期定投（2001年至今，覆盖极端行情）
+
+```python
+"""
+纳指100 ETF (QQQ) 长周期定投回测
+可验证第五章极端行情场景（2000泡沫、2008危机等）
+依赖: pip install akshare pandas
+"""
+import akshare as ak
+import pandas as pd
+
+def backtest_qqq_dca(start="20010101", end="20261231", monthly=1000):
+    """模拟每月固定金额定投QQQ"""
+    df = ak.stock_us_hist(symbol="105.QQQ", period="monthly", start_date=start, end_date=end, adjust="qfq")
+    df = df[["日期", "收盘"]].copy()
+    df.columns = ["date", "close"]
+    df["date"] = pd.to_datetime(df["date"])
+    df["close"] = pd.to_numeric(df["close"], errors="coerce")
+    df = df.dropna().sort_values("date").reset_index(drop=True)
+
+    total_shares = 0.0
+    total_invested = 0.0
+    breakeven_found = False
+    records = []
+
+    for i, row in df.iterrows():
+        shares = monthly / row["close"]
+        total_shares += shares
+        total_invested += monthly
+        current_value = total_shares * row["close"]
+        profit_pct = (current_value / total_invested - 1) * 100
+
+        records.append({
+            "date": row["date"],
+            "close": row["close"],
+            "total_invested": total_invested,
+            "market_value": round(current_value, 2),
+            "profit_pct": round(profit_pct, 2),
+        })
+
+        if not breakeven_found and i >= 6 and current_value >= total_invested:
+            print(f"首次回本: {row['date'].strftime('%Y-%m')} (第{i+1}个月/{(i+1)/12:.1f}年)")
+            print(f"  投入: ${total_invested/1000:.0f}K  资产: ${current_value/1000:.0f}K  收益: {profit_pct:+.1f}%")
+            breakeven_found = True
+
+    result = pd.DataFrame(records)
+    final = result.iloc[-1]
+    years = len(result) / 12
+    cagr = (final["market_value"] / final["total_invested"]) ** (1 / years) - 1
+
+    print(f"\n回测区间: {start} ~ {end}")
+    print(f"月投入: ${monthly}")
+    print(f"定投月数: {len(result)}个月")
+    print(f"累计投入: ${final['total_invested']:,.0f}")
+    print(f"最终资产: ${final['market_value']:,.0f}")
+    print(f"总收益率: {final['profit_pct']:.1f}%")
+    print(f"年化收益: {cagr*100:.1f}%")
+
+    return result
+
+# 运行：从2001年开始定投（覆盖互联网泡沫后、金融危机、疫情、加息熊市）
+backtest_qqq_dca(start="20010101", end="20261231", monthly=1000)
 ```
 
 ### 8.2 复利计算器
